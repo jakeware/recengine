@@ -36,6 +36,7 @@ class Movie:
         self.ratings = dict()
 
 # read movie data file
+print 'loading data...'
 with open('../data/data_2014-06-18.csv', 'rb') as csvfile:
     reader = csv.reader(csvfile, delimiter=',', quotechar='|')
 
@@ -69,7 +70,10 @@ with open('../data/data_2014-06-18.csv', 'rb') as csvfile:
             movies.append(temp_movie)
         rownum += 1
 
+print 'done loading'
+
 # lookup movie ids
+print 'searching for title matches...'
 for mov in movies:
     title = mov.titles['User']
     title = unicode(title, in_encoding, 'replace')
@@ -136,7 +140,7 @@ for mov in movies:
 
             # TITLE
             if verbose:
-                print 'Year:'
+                print 'Title:'
 
             # TODO: Grab all imdb title types
 
