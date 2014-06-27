@@ -3,6 +3,16 @@
 import csv
 import sys
 import pprint
+try:
+    from rottentomatoes import RT
+except ImportError:
+    print 'Import Error: Install the rottentoamtoes package'
+    sys.exit(1)
+try:
+    import imdb
+except ImportError:
+    print 'Import Error: Install the IMDbPY package'
+    sys.exit(1)
 
 # general setup
 verbose = True
@@ -14,15 +24,12 @@ cast_count = 2
 pp = pprint.PrettyPrinter(indent=2)
 
 # imdbpy setup
-try:
-    import imdb
-except ImportError:
-    print 'You need to install the IMDbPY package!'
-    sys.exit(1)
 i = imdb.IMDb()
 in_encoding = sys.stdin.encoding or sys.getdefaultencoding()
 out_encoding = sys.stdout.encoding or sys.getdefaultencoding()
 
+# rottentomatoes setup
+rt = RT()
 
 class Movie:
     def __init__(self):
@@ -236,9 +243,9 @@ for mov in movies:
             mov.ratings['imdb'] = imdb_rating
 
             # rotten tomatoes
-            # TODO: Fill in rating
+            rt.search('the lion king')
 
-            # meta critic
+            # meta-critic
             # TODO: Fill in rating
 
             if verbose:
