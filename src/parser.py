@@ -4,6 +4,7 @@ import csv
 import sys
 import pprint
 import argparse
+import time
 from collections import defaultdict
 try:
     from rottentomatoes import RT
@@ -24,9 +25,10 @@ except ImportError:
 # general setup
 infile = '../data/data_2014-06-18.csv'
 outfile = '../data/data_output.txt'
-verbose = True
+verbose = False
 debug = False
 quiet = False
+stop_count = 50
 raters = ['Jon','Jeff','Jake','Shu','iMDB','MC','RT','SVH','AKF','DC']
 cast_depth = 2
 search_depth = 5
@@ -89,6 +91,7 @@ class Movie:
 
 # read input file with user provided data
 def userParseData(filename):
+    print 'loading data...'
     with open(filename, 'rb') as csvfile:
         reader = csv.reader(csvfile, delimiter=',', quotechar='|')
 
@@ -121,20 +124,23 @@ def userParseData(filename):
     return movies
 
 def imdbSearch(mov):
+    if debug:
+        print 'searching IMDB...'
+
     title = mov.titles['user']
     title = unicode(title, in_encoding, 'replace')
     try:
         # Do the search, and get the results (a list of Movie objects).
-        results = i.search_movie(title)
+        results_imdb = i.search_movie(title)
     except imdb.IMDbError, e:
-        print "You might not be connected to the internet.  Complete error report:"
+        print "imdbSearch failed"
         print e
-        sys.exit(3)
+        return False
 
     # print search results
     if debug:
         # Print the results.
-        print '    %s result%s for "%s":' % (len(results),('', 's')[len(results) != 1],title.encode(out_encoding, 'replace'))
+        print '    %s result%s for "%s":' % (len(results_imdb),('', 's')[len(results_imdb) != 1],title.encode(out_encoding, 'replace'))
         print 'movieID\t: imdbID : title'
 
         # Print the long imdb title for every movie.
@@ -142,16 +148,36 @@ def imdbSearch(mov):
             outp = u'%s\t: %s : %s' % (res.movieID, i.get_imdbID(res), res['long imdb title'])
             print outp.encode(out_encoding, 'replace')
 
-    return results
+    return results_imdb
+
+def imdbMatch(mov,results_imdb,search_depth):
+    if not results_imdb:
+        mov.matches['imdb'] = False
+        return
+
+    for res_imdb in results_imdb[:search_depth]:
+        if res_imdb['title'] == mov.titles['user']:
+            mov.matches['imdb'] = True
+            if debug:
+                print 'title:{} matched to {}'.format(mov.titles['user'], res_imdb['title'])
+                print 'fetching imdb movie data...'
+            imdbGetData(mov,res_imdb)
+            return
+        else:
+            mov.matches['imdb'] = False
+
+    if debug:
+        print '{} not in titles for {}'.format(mov.titles['user'],res_imdb['title'])
+    return
 
 # get data by ID
 def imdbGetData(mov, res_imdb):
     try:
         mov_imdb = i.get_movie(res_imdb.movieID)
     except imdb.IMDbError, e:
-        print "Probably you're not connected to Internet.  Complete error report:"
+        print "imdbGetData failed"
         print e
-        sys.exit(3)
+        return False
 
     #print mov_imdb.keys()
 
@@ -162,147 +188,218 @@ def imdbGetData(mov, res_imdb):
         print mov.idnum
 
     # TITLE
-    mov.titles['imdb'] = mov_imdb['title']
+    if 'title' in mov_imdb:
+        mov.titles['imdb'] = mov_imdb['title']
     if debug:
         print 'Title:'
         print mov.titles
 
     # YEAR
-    mov.year['imdb'] = mov_imdb['year']
+    if 'year' in mov_imdb:
+        mov.year['imdb'] = mov_imdb['year']
     if debug:
         print 'Year:'
         print mov.year
 
     # DIRECTORS
-    imdb_director = mov_imdb['director']
-    for v in imdb_director:
-        if debug:
-            print v['name']
-            print v.getID()
-        mov.addDirector(('imdb',v['name'],v.getID()))
+    if 'director' in mov_imdb:
+        imdb_director = mov_imdb['director']
+        for v in imdb_director:
+            if debug:
+                print v['name']
+                print v.getID()
+            mov.addDirector(('imdb',v['name'],v.getID()))
     if debug:
         print 'Directors:'
         print mov.directors
 
     # CAST
-    imdb_cast = mov_imdb['cast']
-    for v in imdb_cast[:cast_depth]:
-        if debug:
-            print v['name']
-            print v.getID()
-        mov.addCast(('imdb',v['name'],v.getID()))
+    if 'cast' in mov_imdb:
+        imdb_cast = mov_imdb['cast']
+        for v in imdb_cast[:cast_depth]:
+            if debug:
+                print v['name']
+                print v.getID()
+            mov.addCast(('imdb',v['name'],v.getID()))
     if debug:
         print 'Cast:'
         print mov.cast
 
     # GENRES
-    imdb_genres = mov_imdb['genres']
-    for v in imdb_genres:
-        if debug:
-            print v
-        mov.genres['imdb'].append(v)
+    if 'genres' in mov_imdb:
+        imdb_genres = mov_imdb['genres']
+        for v in imdb_genres:
+            if debug:
+                print v
+            mov.genres['imdb'].append(v)
     if debug:
         print 'Genres:'
         print mov.genres
 
     # RUNTIME
-    mov.runtime['imdb'] = mov_imdb['runtime']
+    if 'runtime' in mov_imdb:
+        mov.runtime['imdb'] = mov_imdb['runtime']
     if debug:
         print 'Runtime:'
         print mov.runtime
 
     # RATINGS
-    mov.ratings['imdb'] = mov_imdb['rating']
+    if 'rating' in mov_imdb:
+        mov.ratings['imdb'] = mov_imdb['rating']
     if debug:
         print 'Ratings:'
         print mov.ratings
 
 def rtSearch(mov):
-    results_rt = rt.search(mov.titles['user'], page_limit=2)
+    if debug:
+        print 'searching rotten tomatoes...'
+
+    try:
+        results_rt = rt.search(mov.titles['user'], page_limit=2)
+    except:
+        print 'WARNING: rtSearch failed for: ' + mov.titles['user']
+        pp.pprint(results_rt)
+        return False
 
     return results_rt
+
+def rtMatch(mov,results_rt,search_depth):
+    if not results_rt:
+        mov.matches['rt'] = False
+        return
+    else:
+        for res_rt in results_rt[:search_depth]:
+            if res_rt['title'] == mov.titles['user']:
+                mov.matches['rt'] = True
+                if debug:
+                    print 'title:{} matched to {}'.format(mov.titles['user'], res_rt['title'])
+                    print 'fetching rt movie data...'
+                rtGetData(mov,res_rt)
+                return
+            else:
+                mov.matches['rt'] = False
+
+        if debug:
+            print '{} not in titles for {}'.format(mov.titles['user'],res_rt['title'])
+        return
 
 def rtGetData(mov,res_rt):
     # get data by id
     try:
         mov_rt = rt.info(res_rt['id'])
     except:
-        print "Error getting rt movie data."
-        sys.exit(3)
+        print 'WARNING: rtGetData failed for: ' + mov.titles['user']
+        return False
 
     #pp.pprint(res_rt)
 
     # ID
-    mov.idnum['rt'] = mov_rt['id']
+    if 'id' in mov_rt:
+        mov.idnum['rt'] = mov_rt['id']
     if debug:
         print 'ID:'
         print mov.idnum
 
     # TITLE
-    mov.titles['rt'] = mov_rt['title']
+    if 'title' in mov_rt:
+        mov.titles['rt'] = mov_rt['title']
     if debug:
         print 'Title:'
         print mov.titles
 
     # YEAR
-    mov.year['rt'] = mov_rt['year']
+    if 'year' in mov_rt:
+        mov.year['rt'] = mov_rt['year']
     if debug:
         print 'Year:'
         print mov.year
 
     # DIRECTORS
-    rt_director = mov_rt['abridged_directors']
-    for v in rt_director:
-        if debug:
-            print v['name']
-            print v['id']
-        mov.addDirector(('rt',v['name'],None))
+    if 'abridged_directors' in mov_rt:
+        rt_director = mov_rt['abridged_directors']
+        for v in rt_director:
+            if debug:
+                print v['name']
+            mov.addDirector(('rt',v['name'],None))
     if debug:
         print 'Directors:'
         print mov.directors
 
     # CAST
-    rt_cast = mov_rt['abridged_cast']
-    for v in rt_cast[:cast_depth]:
-        if debug:
-            print v['name']
-            print v['id']
-        mov.addCast(('rt',v['name'],v['id']))
+    if 'abridged_cast' in mov_rt:
+        rt_cast = mov_rt['abridged_cast']
+        for v in rt_cast[:cast_depth]:
+            if debug:
+                print v['name']
+                print v['id']
+            mov.addCast(('rt',v['name'],v['id']))
     if debug:
         print 'Cast:'
         print mov.cast
 
     # GENRES
-    rt_genres = mov_rt['genres']
-    for v in rt_genres:
-        if debug:
-            print v
-        mov.genres['rt'].append(v)
+    if 'genres' in mov_rt:
+        rt_genres = mov_rt['genres']
+        for v in rt_genres:
+            if debug:
+                print v
+            mov.genres['rt'].append(v)
     if debug:
         print 'Genres:'
         print mov.genres
 
     # RUNTIME
-    mov.runtime['rt'] = mov_rt['runtime']
+    if 'runtime' in mov_rt:
+        mov.runtime['rt'] = mov_rt['runtime']
     if debug:
         print 'Runtime:'
         print mov.runtime
 
     # RATINGS
-    mov.ratings['rt_critics'] = mov_rt['ratings']['critics_score']
-    mov.ratings['rt_audience'] = mov_rt['ratings']['audience_score']
+    if 'ratings' in mov_rt:
+        if 'critics_score' in mov_rt['ratings']:
+            mov.ratings['rt_critics'] = mov_rt['ratings']['critics_score']
+        if 'audience_score' in mov_rt['ratings']:
+            mov.ratings['rt_audience'] = mov_rt['ratings']['audience_score']
     if debug:
         print 'Ratings:'
         print mov.ratings
 
 def mcSearch(mov):
-    response = unirest.post("https://byroredux-metacritic.p.mashape.com/find/movie",
-        headers={"X-Mashape-Key": "kGxeWQbWwmmsh4F8qlBKNauJrroDp15JQmJjsnBvabUYb5j9aY"},
-        params={"retry": 4, "title": mov.titles['user']})
+    if debug:
+        print 'searching metacritic...'
 
-    res_mc = response.body['result']
+    try:
+        response = unirest.post("https://byroredux-metacritic.p.mashape.com/find/movie",
+                    headers={"X-Mashape-Key": "kGxeWQbWwmmsh4F8qlBKNauJrroDp15JQmJjsnBvabUYb5j9aY"},
+                    params={"retry": 4, "title": mov.titles['user']})
+    except:
+        print 'mcSearch failed'
+        res_mc = False
+
+    if 'result' in response.body.keys():
+        res_mc = response.body['result']
+    else:
+        res_mc = False
 
     return res_mc
+
+# search depth not used because only one result is returned from search
+def mcMatch(mov,res_mc,search_depth):
+    if not res_mc:
+        mov.matches['mc'] = False
+        return
+    else:
+        if res_mc['name'] == mov.titles['user']:
+            mov.matches['mc'] = True
+            if debug:
+                print 'title:{} matched to {}'.format(mov.titles['user'], res_mc['name'])
+                print 'fetching mc movie data...'
+            mcGetData(mov,res_mc)
+        else:
+            mov.matches['mc'] = False
+
+    return
 
 def mcGetData(mov,res_mc):
     #pp.pprint(res_mc)
@@ -311,7 +408,8 @@ def mcGetData(mov,res_mc):
     # NA
 
     # TITLE
-    mov.titles['mc'] = res_mc['name']
+    if 'name' in 'res_mc':
+        mov.titles['mc'] = res_mc['name']
     if debug:
         print 'Title:'
         print mov.titles
@@ -332,94 +430,53 @@ def mcGetData(mov,res_mc):
     # need to parse string
 
     # RATINGS
-    mov.ratings['mc_score'] = res_mc['score']
-    mov.ratings['mc_userscore'] = res_mc['userscore']
+    if 'score' in res_mc:
+        mov.ratings['mc_score'] = res_mc['score']
+    if 'userscore' in res_mc:
+        mov.ratings['mc_userscore'] = res_mc['userscore']
     if debug:
         print 'Ratings:'
         print mov.ratings
 
+def printSummary(mov,quiet,verbose):
+    # print short summary
+    if not quiet:
+        print mov.titles['user']
+        print mov.matches
+
+    # print final results
+    if verbose:
+        print 'summary:'
+        mov.summary()
+        print 'sleeping...'
+
+    time.sleep(2)
+
 def main():
-    print 'loading data...'
+    # parse user data
     movies = userParseData(infile)
-    print 'done loading data'
+
     print 'gathering data from sources...'
-
-    # loop through all movies in user database
+    # loop through all movies in user database and get data from sources
     for i, m in enumerate(movies):
+        # only want to do the n movies in test phase...
+        if i > stop_count:
+            sys.exit(0)
+
         # IMDB
-        if debug:
-            print 'searching IMDB...'
-
-        # search by movie title
-        results_imdb = imdbSearch(m)
-
-        # look for exact match in search results
-        for res_imdb in results_imdb[:search_depth]:
-            if res_imdb['title'] == m.titles['user']:
-                m.matches['imdb'] = True
-                if debug:
-                    print 'title:{} matched to {}'.format(m.titles['user'], res_imdb['title'])
-                    print 'fetching imdb movie data...'
-                imdbGetData(m,res_imdb)
-            else:
-                m.matches['imdb'] = False
-                if debug:
-                    print '{} not in titles for {}'.format(m.titles['user'],res_imdb['title'])
-
-            # break if we found the movie
-            if m.matches['imdb'] == True:
-                break
+        results_imdb = imdbSearch(m)  # search by movie title
+        imdbMatch(m,results_imdb,search_depth)  # look for exact match in search results and get data
 
         # RT
-        if debug:
-            print 'searching rotten tomatoes...'
-
-        # search by movie title
-        results_rt = rtSearch(m)
-
-        # look for exact match in search results
-        for res_rt in results_rt[:search_depth]:
-            if res_rt['title'] == m.titles['user']:
-                m.matches['rt'] = True
-                if debug:
-                    print 'title:{} matched to {}'.format(m.titles['user'], res_rt['title'])
-                    print 'fetching imdb movie data...'
-                rtGetData(m,res_rt)
-            else:
-                m.matches['rt'] = False
-                if debug:
-                    print '{} not in titles for {}'.format(m.titles['user'],res_rt['title'])
-
-            # break if we found the movie
-            if m.matches['rt'] == True:
-                break
-
+        results_rt = rtSearch(m)  # search by movie title
+        rtMatch(m,results_rt,search_depth)  # look for exact match in search results and get data
 
         # MC
-        if debug:
-            print 'searching metacritic...'
+        results_mc = mcSearch(m)  # search by movie title
+        mcMatch(m,results_mc,search_depth)  # look for exact match in search results and get data
 
-        # search by movie title
-        res_mc = mcSearch(m)
-
-        # look for exact match in search results
-        if res_mc['name'] == m.titles['user']:
-            m.matches['mc'] = True
-            if debug:
-                print 'title:{} matched to {}'.format(m.titles['user'], res_mc['name'])
-                print 'fetching imdb movie data...'
-            mcGetData(m,res_mc)
-        else:
-            m.matches['mc'] = False
-
-        # print final results
-        if verbose:
-            print 'summary:'
-            m.summary()
-
-        # break because we only want to do the first movie in test phase...
-        if i > 2:
-            break
+        # SUMMARY
+        printSummary(m,quiet,verbose)
 
 if __name__ == "__main__":
     main()
